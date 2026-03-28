@@ -229,7 +229,11 @@ def iniciar_v2():
                 fase_msg = "POSICIONE O ROSTO..." if FASE_CADASTRO==1 else "VIRE O ROSTO AOS POUCOS..."
             
             if fase_msg:
-                cv2.putText(frame, fase_msg, (w//2-150, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
+                # Sombra/Fundo para o texto de instrução (Melhor visibilidade)
+                text_size = cv2.getTextSize(fase_msg, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 3)[0]
+                text_x = (w - text_size[0]) // 2
+                cv2.rectangle(frame, (text_x - 10, 20), (text_x + text_size[0] + 10, 80), (0, 0, 0), -1)
+                cv2.putText(frame, fase_msg, (text_x, 65), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 255), 3)
         
         elif caixas_todas:
             rosto_foco = max(caixas_todas, key=lambda b: b[2]*b[3])
