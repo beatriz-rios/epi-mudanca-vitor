@@ -12,8 +12,8 @@ DB_CONFIG = {
     'host': '127.0.0.1',
     'user': 'root',
     'password': '',
-    'database': 'epi_guard',
-    'port': 3308
+    'database': 'epiguard',
+    'port': 3306
 }
 
 # Garantir que o script rode no seu próprio diretório
