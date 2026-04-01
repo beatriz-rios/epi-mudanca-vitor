@@ -1,5 +1,4 @@
 import cv2
-import numpy as np
 from ultralytics import YOLO
 import threading
 import time
@@ -10,9 +9,11 @@ app = Flask(__name__)
 CORS(app)
 
 # ==============================================================================
-# 1. CONFIGURAÇÕES DE IA (SISTEMA HÍBRIDO)
+# 1. CONFIGURAÇÕES DE IA (SISTEMA DUPLO: YOLO-World + best(3).pt)
 # ==============================================================================
-# Voltamos a procurar o capacete, mas usaremos a cor AZUL como plano de backup para a frente!
+# Coloque aqui o caminho completo se o ficheiro não estiver na mesma pasta
+CAMINHO_MODELO_CUSTOM = "C:\\xampp\\htdocs\\epi-mudanca-vitor\\epi-mudanca-vitor-main\\EPI-original-trabalho-bia\\senaiEpi_Ia\\best (3).pt" 
+
 CLASSES_YOLO = ["person", "helmet", "hard hat"]
 PERSON_CLASS = 0
 HELMET_CLASSES = [1, 2]
@@ -29,37 +30,21 @@ foco_cor = (0, 0, 255)
 foco_bbox = None
 
 # ==============================================================================
-# 2. INICIALIZAÇÃO
+# 2. INICIALIZAÇÃO DAS DUAS IAs
 # ==============================================================================
-print("[SISTEMA] Carregando YOLO-World (Aguarde)...")
-model = YOLO("yolov8s-worldv2.pt")
-model.set_classes(CLASSES_YOLO)
+print("[SISTEMA] 1/2 Carregando YOLO-World (Pessoas e Capacetes Genéricos)...")
+model_world = YOLO("yolov8s-worldv2.pt")
+model_world.set_classes(CLASSES_YOLO)
+
+print(f"[SISTEMA] 2/2 Carregando IA CUSTOMIZADA ({CAMINHO_MODELO_CUSTOM})...")
+try:
+    model_custom = YOLO(CAMINHO_MODELO_CUSTOM)
+    print("[SISTEMA] IA Customizada carregada com sucesso!")
+except Exception as e:
+    print(f"[ERRO CRÍTICO] Falha ao carregar {CAMINHO_MODELO_CUSTOM}. Erro: {e}")
 
 # ==============================================================================
-# 3. VALIDAÇÃO DE COR (SOMENTE AZUL DA FAIXA FRONTAL)
-# ==============================================================================
-def verificar_azul_frente(img_crop):
-    if img_crop is None or img_crop.size == 0:
-        return False, 0.0
-    
-    hsv = cv2.cvtColor(img_crop, cv2.COLOR_BGR2HSV)
-    
-    # Busca estrita pela faixa azul (ignora cabelos e sombras)
-    lower_blue = np.array([90, 40, 20]) 
-    upper_blue = np.array([145, 255, 255])
-    
-    mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
-    
-    area_total = img_crop.shape[0] * img_crop.shape[1]
-    ratio_blue = cv2.countNonZero(mask_blue) / area_total
-    
-    # Requer apenas 3.5% da cabeça preenchida com a faixa azul
-    tem_azul = ratio_blue >= 0.035 
-    
-    return tem_azul, ratio_blue
-
-# ==============================================================================
-# 4. PROCESSAMENTO DAS THREADS
+# 3. PROCESSAMENTO DAS THREADS
 # ==============================================================================
 def capturar_frames():
     global frame_atual
@@ -84,21 +69,30 @@ def processar_ia():
         with lock_frame:
             img_process = frame_atual.copy()
 
-        # Confiança ajustada para captar pessoas e formatos de capacete
-        results = model.predict(img_process, conf=0.30, verbose=False)
+        # Roda as DUAS IAs no mesmo frame
+        results_world = model_world.predict(img_process, conf=0.30, verbose=False)
+        results_custom = model_custom.predict(img_process, conf=0.25, verbose=False)
         
         pessoas_yolo = []
-        capacetes_yolo = []
+        capacetes_yolo_world = []
+        capacetes_ia_custom = []
         
-        for r in results:
+        # Lendo os resultados do YOLO-World
+        for r in results_world:
             for box in r.boxes:
                 coords = list(map(int, box.xyxy[0]))
                 cls = int(box.cls[0])
                 if cls == PERSON_CLASS:
                     pessoas_yolo.append(coords)
                 elif cls in HELMET_CLASSES:
-                    capacetes_yolo.append(coords)
+                    capacetes_yolo_world.append(coords)
 
+        # Lendo os resultados da SUA IA (best (3).pt)
+        for r in results_custom:
+            for box in r.boxes:
+                capacetes_ia_custom.append(list(map(int, box.xyxy[0])))
+
+        # Encontra a pessoa principal (a maior na câmara)
         pessoa_foco = None
         maior_area = 0
         for p in pessoas_yolo:
@@ -115,53 +109,51 @@ def processar_ia():
             h_pessoa = py2 - py1
             w_pessoa = px2 - px1
             
-            # ------------------------------------------------------------------
-            # PASSO 1: O YOLO VIU O FORMATO DO CAPACETE NAS LATERAIS?
-            # ------------------------------------------------------------------
-            tem_capacete_formato = False
+            # Define a área onde o capacete deve estar (em cima da cabeça)
             zona_acima_cabeca = py1 - int(h_pessoa * 0.20)
             limite_y_olhos = py1 + int(h_pessoa * 0.20)
             
-            for (cx1, cy1, cx2, cy2) in capacetes_yolo:
-                hcx = (cx1 + cx2) / 2
-                hcy = (cy1 + cy2) / 2
-                # Se o centro do capacete detectado estiver na região da cabeça desta pessoa:
+            # ------------------------------------------------------------------
+            # CHECAGEM 1: SUA IA (A Especialista)
+            # ------------------------------------------------------------------
+            tem_capacete_custom = False
+            for (cx1, cy1, cx2, cy2) in capacetes_ia_custom:
+                hcx, hcy = (cx1 + cx2) / 2, (cy1 + cy2) / 2
                 if px1 <= hcx <= px2 and zona_acima_cabeca <= hcy <= limite_y_olhos:
-                    tem_capacete_formato = True
+                    tem_capacete_custom = True
                     break
 
             # ------------------------------------------------------------------
-            # PASSO 2: CORTAR A CABEÇA PARA LER A COR AZUL DA FRENTE
+            # CHECAGEM 2: YOLO-WORLD (O Genérico)
             # ------------------------------------------------------------------
-            hx1 = max(0, px1 + int(w_pessoa * 0.25)) 
-            hx2 = min(img_process.shape[1], px2 - int(w_pessoa * 0.25))
-            hy1 = max(0, py1 - int(h_pessoa * 0.08)) 
-            hy2 = min(img_process.shape[0], py1 + int(h_pessoa * 0.12))
-            
-            tem_azul_frente = False
-            r_blue = 0.0
-            
-            if hx2 > hx1 and hy2 > hy1:
-                img_cabeca = img_process[hy1:hy2, hx1:hx2]
-                tem_azul_frente, r_blue = verificar_azul_frente(img_cabeca)
+            tem_capacete_world = False
+            for (cx1, cy1, cx2, cy2) in capacetes_yolo_world:
+                hcx, hcy = (cx1 + cx2) / 2, (cy1 + cy2) / 2
+                if px1 <= hcx <= px2 and zona_acima_cabeca <= hcy <= limite_y_olhos:
+                    tem_capacete_world = True
+                    break
             
             # ------------------------------------------------------------------
-            # DECISÃO FINAL: APROVA SE TIVER O FORMATO(LADO) OU A COR AZUL(FRENTE)
+            # DECISÃO FINAL: BASTA UMA DAS IAs CONFIRMAR
             # ------------------------------------------------------------------
-            capacete_valido = tem_capacete_formato or tem_azul_frente
+            capacete_valido = tem_capacete_custom or tem_capacete_world
             
-            if tem_capacete_formato and tem_azul_frente:
-                txt = f"APROV: 100% (Formato+Azul:{r_blue:.1%})"
-            elif tem_capacete_formato:
-                txt = "APROV: YOLO (Formato Lateral)"
-            elif tem_azul_frente:
-                txt = f"APROV: COR (Faixa Azul:{r_blue:.1%})"
+            if tem_capacete_custom and tem_capacete_world:
+                txt = "APROV: 100% (Ambas as IAs)"
+            elif tem_capacete_custom:
+                txt = "APROV: SUA IA (best.pt)"
+            elif tem_capacete_world:
+                txt = "APROV: YOLO-World"
             else:
-                txt = "REPROVADO: CABELO/SEM EPI"
+                txt = "REPROVADO: SEM EPI"
+
+            # Desenha a caixa na região da cabeça para mostrar o resultado
+            hx1 = max(0, px1 + int(w_pessoa * 0.20)) 
+            hx2 = min(img_process.shape[1], px2 - int(w_pessoa * 0.20))
+            hy1 = max(0, py1 - int(h_pessoa * 0.15)) 
+            hy2 = min(img_process.shape[0], py1 + int(h_pessoa * 0.15))
 
             cor_caixa = (0, 255, 0) if capacete_valido else (0, 0, 255)
-            
-            # Desenha a caixa na região da cabeça
             temp_cap_desenho.append((hx1, hy1, hx2, hy2, cor_caixa, txt))
             
             if capacete_valido:
@@ -175,7 +167,7 @@ def processar_ia():
         time.sleep(0.01)
 
 # ==============================================================================
-# 5. EXIBIÇÃO LOCAL
+# 4. EXIBIÇÃO LOCAL
 # ==============================================================================
 def mostrar_na_janela():
     while True:
@@ -185,7 +177,6 @@ def mostrar_na_janela():
 
             for (x1, y1, x2, y2, cor, txt) in ultimo_desenho_capacetes:
                 cv2.rectangle(vis_frame, (x1, y1), (x2, y2), cor, 2) 
-                # Ajuste no texto para caber bem na tela
                 cv2.putText(vis_frame, txt, (x1-10, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.55, cor, 2)
 
             if foco_bbox is not None:
@@ -193,7 +184,7 @@ def mostrar_na_janela():
                 cv2.putText(vis_frame, f"{foco_status}", (foco_bbox[0]+5, foco_bbox[1]+25), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, foco_cor, 2)
 
-            cv2.imshow("TESTE - ANTI FALSO-POSITIVO (HIBRIDO)", vis_frame)
+            cv2.imshow("DUPLO CHECK (YoloWorld + SuaIA)", vis_frame)
             if cv2.waitKey(1) & 0xFF in [27, ord('q')]: break
         else: time.sleep(0.1)
     cv2.destroyAllWindows()
@@ -203,10 +194,10 @@ if __name__ == '__main__':
     threading.Thread(target=processar_ia, daemon=True).start()
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False), daemon=True).start()
     
-    print("="*50)
-    print("SISTEMA HÍBRIDO ATIVADO")
-    print("De Lado: Valida pelo formato do capacete (Ignora cabelo preto)")
-    print("De Frente: Valida pela faixa Azul Escura")
-    print("="*50)
+    print("="*60)
+    print("SISTEMA DE DUPLA SEGURANÇA ATIVADO")
+    print(" 1. YOLO-World (Humanos/Capacetes Genéricos)")
+    print(" 2. IA Customizada 'best(3).pt' (Especialista em Capacetes)")
+    print("="*60)
     
     mostrar_na_janela()
