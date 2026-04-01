@@ -12,7 +12,7 @@ CORS(app)
 # 1. CONFIGURAÇÕES DE IA (SISTEMA DUPLO: YOLO-World + best(3).pt)
 # ==============================================================================
 # Coloque aqui o caminho completo se o ficheiro não estiver na mesma pasta
-CAMINHO_MODELO_CUSTOM = "C:\\xampp\\htdocs\\epi-mudanca-vitor\\epi-mudanca-vitor-main\\EPI-original-trabalho-bia\\senaiEpi_Ia\\best (3).pt" 
+CAMINHO_MODELO_CUSTOM = "C:\\xampp\\htdocs\\epi-mudanca-vitor\\epi-mudanca-vitor-main\\EPI-original-trabalho-bia\\senaiEpi_Ia\\best.pt" 
 
 CLASSES_YOLO = ["person", "helmet", "hard hat"]
 PERSON_CLASS = 0
